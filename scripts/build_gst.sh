@@ -33,12 +33,18 @@ RPICAM_ENABLED=${RPICAM_ENABLED:-$ARM}
 GST_MESON_OPTIONS_DEFAULT=(
     --buildtype=release
     --strip
+    --default-library=static
+    -Db_lto=true
+    -Db_ndebug=if-release
     -D bad=enabled
     -D build-tools-source=system
     -D devtools=enabled
     -D doc=disabled
+    -D extra-checks=disabled
     -D ges=disabled
     -D gpl=enabled
+    -D gst-full=enabled
+    -D gst-full-target-type=shared_library
     -D gst-plugins-bad:libde265=enabled
     -D gst-plugins-bad:openh264=disabled
     -D gst-plugins-bad:rtp=enabled
@@ -52,6 +58,8 @@ GST_MESON_OPTIONS_DEFAULT=(
     -D gst-plugins-good:vpx=enabled
     -D gst-plugins-ugly:x264=enabled
     -D gst-rtsp-server:examples=enabled
+    -D gstreamer:gst_debug=false
+    -D gstreamer:tracer_hooks=false
     -D introspection=disabled
     -D libav=enabled
     -D nls=disabled
@@ -90,6 +98,7 @@ fi
 if [ "$LIBCAMERA_ENABLED" == true ]; then
     GST_MESON_OPTIONS+=(
         -D custom_subprojects=libcamera
+        -D libcamera:werror=false
         -D libcamera:cam=disabled
         -D libcamera:cpp_std=c++17
         -D libcamera:documentation=disabled
@@ -271,14 +280,57 @@ meson setup "$GST_BUILD_DIR" "${GST_MESON_OPTIONS[@]}"
 
 DESTDIR="$GST_INSTALL_DIR" ninja install -C "$GST_BUILD_DIR"
 
-# Pre-install RTSP helpers
+# With gst-full, all GStreamer-native plugins are statically linked into
+# libgstreamer-full-1.0.so. Remove the individual plugin .so/.a files to
+# avoid duplicate type registration at runtime. External plugins (e.g.
+# libcamera) are NOT in gst-full and must be kept.
+GST_PLUGIN_DIR=$(echo "$GST_INSTALL_DIR"/usr/local/lib/*/gstreamer-1.0)
+EXTERNAL_PLUGINS=()
+if [ "$LIBCAMERA_ENABLED" == true ]; then
+    EXTERNAL_PLUGINS+=(libgstlibcamera.so)
+fi
+for f in "$GST_PLUGIN_DIR"/*.so "$GST_PLUGIN_DIR"/*.a; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f")
+    keep=false
+    for ext in "${EXTERNAL_PLUGINS[@]}"; do
+        if [ "$base" == "$ext" ]; then
+            keep=true
+            break
+        fi
+    done
+    if [ "$keep" == false ]; then
+        rm -f "$f"
+    fi
+done
+
+# Pre-install RTSP helpers.
+# gst-full disables examples, so compile them against the installed libs.
 GST_RTSP_HELPERS=(
     test-mp4
     test-launch
     test-netclock
     test-netclock-client
 )
+GST_RTSP_EXAMPLES_DIR="$GSTREAMER_GIT_DIR"/subprojects/gst-rtsp-server/examples
+ARCH_TRIPLE=$(cc -dumpmachine)
+GST_LIB_DIR="$GST_INSTALL_DIR/usr/local/lib/$ARCH_TRIPLE"
+GST_INC_DIR="$GST_INSTALL_DIR/usr/local/include/gstreamer-1.0"
+GLIB_CFLAGS=$(pkg-config --cflags glib-2.0 gobject-2.0 gio-2.0)
+GLIB_LIBS=$(pkg-config --libs glib-2.0 gobject-2.0 gio-2.0)
+
 for file in "${GST_RTSP_HELPERS[@]}"; do
-    install -Dm755 "$GST_BUILD_DIR"/subprojects/gst-rtsp-server/examples/"$file" \
-        "$GST_INSTALL_DIR"/usr/local/bin/"$file"
+    if [ -f "$GST_BUILD_DIR"/subprojects/gst-rtsp-server/examples/"$file" ]; then
+        install -Dm755 "$GST_BUILD_DIR"/subprojects/gst-rtsp-server/examples/"$file" \
+            "$GST_INSTALL_DIR"/usr/local/bin/"$file"
+    else
+        cc "$GST_RTSP_EXAMPLES_DIR/$file.c" -o "$GST_INSTALL_DIR/usr/local/bin/$file" \
+            -I"$GST_INC_DIR" $GLIB_CFLAGS \
+            -L"$GST_LIB_DIR" -Wl,-rpath-link,"$GST_LIB_DIR" \
+            -lgstreamer-full-1.0 \
+            "$GST_LIB_DIR"/libgstrtspserver-1.0.a \
+            "$GST_LIB_DIR"/libgstnet-1.0.a \
+            $GLIB_LIBS \
+            -Wl,-rpath,/usr/local/lib/"$ARCH_TRIPLE"
+    fi
 done
