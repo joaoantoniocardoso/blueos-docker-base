@@ -30,6 +30,21 @@ RPICAM_ENABLED=${RPICAM_ENABLED:-$ARM}
 # them here to be documented.
 # Most of the options are visible on meson_options.txt files under each
 # GStreamer (sub)project root folder, like: https://gitlab.freedesktop.org/gstreamer/gstreamer/-/blob/main/subprojects/gst-plugins-bad/meson_options.txt
+IS_QEMU=false
+if grep -q qemu /proc/self/maps 2>/dev/null; then
+    IS_QEMU=true
+fi
+
+# Build parallelism: QEMU cross-compilation is memory-intensive, so default
+# to fewer parallel jobs to prevent GCC crashes. Override with NINJA_MAX_JOBS.
+if [ -z "$NINJA_MAX_JOBS" ]; then
+    if [ "$IS_QEMU" == true ]; then
+        NINJA_MAX_JOBS=$(( ($(nproc) + 1) / 2 ))
+        [ "$NINJA_MAX_JOBS" -lt 1 ] && NINJA_MAX_JOBS=1
+    fi
+fi
+NINJA_JOBS_FLAG=${NINJA_MAX_JOBS:+"-j${NINJA_MAX_JOBS}"}
+
 GST_MESON_OPTIONS_DEFAULT=(
     --buildtype=release
     --strip
@@ -80,6 +95,9 @@ GST_MESON_OPTIONS_DEFAULT=(
     -D webrtc=enabled
 )
 GST_MESON_OPTIONS=("${GST_MESON_OPTIONS[@]:-${GST_MESON_OPTIONS_DEFAULT[@]}}")
+if [ "$IS_QEMU" == true ]; then
+    echo "QEMU detected: limiting ninja parallelism to ${NINJA_MAX_JOBS} jobs"
+fi
 # If enabled, add OMX build configurations to the GST_MESON_OPTIONS array
 # Note: GStreamer >= 1.24.0 doesn't support it, and won't recognize the `omx` property
 if [ "$GST_OMX_ENABLED" == true ]; then
@@ -219,6 +237,8 @@ GIT: $GST_GIT_URL
 Version: $GST_VERSION
 Install path: $GST_INSTALL_DIR
 Architecture: $ARCH
+QEMU detected: $IS_QEMU
+Ninja jobs: ${NINJA_MAX_JOBS:-$(nproc) (auto)}
 GStreamer Meson Options:
     ${GST_MESON_OPTIONS[@]}
 GStreamer tool dependencies to be installed from APT:
@@ -283,7 +303,7 @@ fi
 GST_BUILD_DIR=builddir
 meson setup "$GST_BUILD_DIR" "${GST_MESON_OPTIONS[@]}"
 
-DESTDIR="$GST_INSTALL_DIR" ninja install -C "$GST_BUILD_DIR"
+DESTDIR="$GST_INSTALL_DIR" ninja $NINJA_JOBS_FLAG install -C "$GST_BUILD_DIR"
 
 # With gst-full, all GStreamer-native plugins are statically linked into
 # libgstreamer-full-1.0.so. Remove the individual plugin .so/.a files to
