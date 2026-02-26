@@ -164,7 +164,9 @@ COPY --from=gstreamer /artifacts/. /.
 
 # Update links for the installed libraries and check if GStreamer is setup correctly
 COPY --link ./scripts/inspect_gst_plugins.sh /inspect_gst_plugins.sh
+COPY --link ./scripts/benchmark_gst.sh /benchmark_gst.sh
 RUN ldconfig \
     && /inspect_gst_plugins.sh \
     && mkdir -p /home/pi/tools \
-    && mv /inspect_gst_plugins.sh /home/pi/tools/.
+    && mv /inspect_gst_plugins.sh /home/pi/tools/. \
+    && mv /benchmark_gst.sh /home/pi/tools/.
