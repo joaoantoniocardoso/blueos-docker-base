@@ -18,7 +18,7 @@ on:
 
 jobs:
   build:
-    runs-on: s6-x86
+    runs-on: ubuntu-24.04
 
     strategy:
       matrix:
@@ -128,7 +128,7 @@ jobs:
           fi
 
   merge:
-    runs-on: s6-x86
+    runs-on: ubuntu-24.04
     needs:
       - build
     steps:
