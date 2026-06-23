@@ -42,13 +42,19 @@ jobs:
       - name: Prepare
         id: prepare
         run: |
-          echo "DOCKER_IMAGE=${DOCKER_USERNAME:-bluerobotics}/${PROJECT}-${DOCKER}" >> $GITHUB_ENV
+          docker_image=${DOCKER_USERNAME:-bluerobotics}/${PROJECT}-${DOCKER}
+          echo "DOCKER_IMAGE=${docker_image}" >> $GITHUB_ENV
 
           rm -rf "${ARTIFACTS_PATH}" "${DIGESTS_PATH}"
           mkdir -p "${ARTIFACTS_PATH}" "${DIGESTS_PATH}"
 
           platform=${{ matrix.platform }}
-          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          platform_pair=${platform//\//-}
+          echo "PLATFORM_PAIR=${platform_pair}" >> $GITHUB_ENV
+          echo "CACHE_FROM=type=registry,ref=${docker_image}:buildcache-${platform_pair}" >> $GITHUB_ENV
+          if [ "${{ github.event_name }}" != "pull_request" ] || [ "${{ github.event.pull_request.head.repo.full_name }}" = "${{ github.repository }}" ]; then
+            echo "CACHE_TO=type=registry,ref=${docker_image}:buildcache-${platform_pair},mode=max" >> $GITHUB_ENV
+          fi
 
       - name: Docker meta
         id: meta
@@ -74,7 +80,11 @@ jobs:
           keep-state: true
 
       - name: Login to DockerHub
-        if: success() && github.event_name != 'pull_request'
+        if: >-
+          success() && (
+            github.event_name != 'pull_request'
+            || github.event.pull_request.head.repo.full_name == github.repository
+          )
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -91,8 +101,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           outputs: type=docker,dest=${{ env.ARTIFACTS_PATH }}/${{ env.PLATFORM_PAIR }}.tar
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,scope=${{ env.PLATFORM_PAIR }},mode=max
+          cache-from: ${{ env.CACHE_FROM }}
+          cache-to: ${{ env.CACHE_TO }}
 
       - name: Export digest
         run: |
